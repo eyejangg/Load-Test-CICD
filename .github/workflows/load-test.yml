@@ -1,0 +1,93 @@
+name: Share-Ed Load Test
+
+on:
+  # ทุก push เข้า main จะรันเพียง Smoke Test เพื่อไม่ให้ production ถูกโหลดหนักโดยอัตโนมัติ
+  push:
+    branches: [main]
+    paths:
+      - '**.js'
+      - '.github/workflows/load-test.yml'
+
+  # ใช้ปุ่ม Run workflow เพื่อเลือกทดสอบ 20, 50 หรือ 100 VUs ด้วยตนเอง
+  workflow_dispatch:
+    inputs:
+      test_profile:
+        description: 'เลือกชุดทดสอบ'
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, load20, capacity]
+      max_vus:
+        description: 'ใช้เมื่อเลือก capacity: 20, 50 หรือ 100'
+        required: true
+        default: '20'
+        type: choice
+        options: ['20', '50', '100']
+
+permissions:
+  contents: read
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TEST_PROFILE: ${{ inputs.test_profile || 'smoke' }}
+      MAX_VUS: ${{ inputs.max_vus || '20' }}
+      # Secret นี้จะไม่ถูกพิมพ์ออกมาใน log และไม่ต้องใส่ค่าไว้ในโค้ด
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: ดาวน์โหลดไฟล์จาก repository
+        uses: actions/checkout@v4
+
+      - name: เตรียมโฟลเดอร์ผลทดสอบ
+        run: mkdir -p results
+
+      - name: รัน k6 ตามชุดทดสอบที่เลือก
+        id: k6
+        continue-on-error: true
+        run: |
+          case "$TEST_PROFILE" in
+            smoke)
+              docker run --rm -v "$PWD:/work" -w /work grafana/k6:1.7.1 run smoke-test.js
+              ;;
+            load20)
+              docker run --rm -v "$PWD:/work" -w /work grafana/k6:1.7.1 run load-test.js
+              ;;
+            capacity)
+              docker run --rm -v "$PWD:/work" -w /work grafana/k6:1.7.1 run -e MAX_VUS="$MAX_VUS" capacity-test.js
+              ;;
+            *)
+              echo "ไม่รู้จักชุดทดสอบ: $TEST_PROFILE"
+              exit 2
+              ;;
+          esac
+
+      - name: สร้างข้อความรายงานสำหรับ Discord
+        if: always()
+        env:
+          WORKFLOW_STATUS: ${{ steps.k6.outcome }}
+        run: node ci/build-discord-report.mjs
+
+      - name: ส่งรายงานเข้า Discord
+        if: ${{ always() && env.DISCORD_WEBHOOK_URL != '' }}
+        run: |
+          curl --fail --request POST "$DISCORD_WEBHOOK_URL" \
+            --header 'Content-Type: application/json' \
+            --data @results/discord-payload.json
+
+      - name: เก็บผลทดสอบเป็นไฟล์ดาวน์โหลด
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-${{ github.run_id }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ให้ workflow เป็นสีแดงเมื่อ k6 ไม่ผ่าน แม้จะส่งรายงานและเก็บ artifact เรียบร้อยแล้ว
+      - name: จบงานตามผล k6
+        if: steps.k6.outcome != 'success'
+        run: exit 1
