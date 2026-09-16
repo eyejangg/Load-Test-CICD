@@ -16,7 +16,7 @@ on:
         required: true
         default: smoke
         type: choice
-        options: [smoke, diagnostic, load20, capacity]
+        options: [smoke, diagnostic, load20, capacity, authenticated]
       max_vus:
         description: 'ใช้เมื่อเลือก capacity: 20, 50 หรือ 100'
         required: true
@@ -34,7 +34,10 @@ jobs:
     env:
       TEST_PROFILE: ${{ inputs.test_profile || 'smoke' }}
       MAX_VUS: ${{ inputs.max_vus || '20' }}
-      # Secret นี้จะไม่ถูกพิมพ์ออกมาใน log และไม่ต้องใส่ค่าไว้ในโค้ด
+      # เก็บข้อมูลบัญชีทดสอบและ Webhook ไว้ใน GitHub Secrets เท่านั้น
+      TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
+      TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
@@ -61,6 +64,14 @@ jobs:
               ;;
             capacity)
               docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run -e MAX_VUS="$MAX_VUS" capacity-test.js
+              ;;
+            authenticated)
+              # ทดสอบ Login -> ข้อมูลผู้ใช้ -> รายการโพสต์ -> รายละเอียดโพสต์ แบบอ่านอย่างเดียว
+              docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+                -e EMAIL="$TEST_EMAIL" \
+                -e PASSWORD="$TEST_PASSWORD" \
+                -e SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+                grafana/k6:1.7.1 run authenticated-smoke.js
               ;;
             *)
               echo "ไม่รู้จักชุดทดสอบ: $TEST_PROFILE"
