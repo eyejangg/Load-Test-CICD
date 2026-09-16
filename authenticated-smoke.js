@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, fail, sleep } from 'k6';
 import { thaiSummary } from './reporter.js';
 
-// กำหนดค่าเหล่านี้ตอนรันเท่านั้น ห้ามบันทึกบัญชีจริงหรือ key ลงในไฟล์
+// ค่าเหล่านี้รับจาก GitHub Secrets ตอนรันเท่านั้น ห้ามใส่ในไฟล์
 const API_BASE_URL = __ENV.API_BASE_URL || 'https://share-ed-backend-6jer.onrender.com/api/v1';
 const SUPABASE_URL = __ENV.SUPABASE_URL || 'https://bzxlqtzspmtnpibfsuei.supabase.co';
 const EMAIL = __ENV.EMAIL;
@@ -10,48 +10,71 @@ const PASSWORD = __ENV.PASSWORD;
 const SUPABASE_ANON_KEY = __ENV.SUPABASE_ANON_KEY;
 
 export const options = {
-    vus: 1,
-    iterations: 1,
-    thresholds: {
-        http_req_failed: ['rate<0.01'],
-        http_req_duration: ['p(95)<1000'],
-    },
+  vus: 1,
+  iterations: 1,
+  thresholds: {
+    http_req_failed: ['rate<0.01'],
+    http_req_duration: ['p(95)<1000'],
+  },
 };
 
 export default function () {
-    if (!EMAIL || !PASSWORD || !SUPABASE_ANON_KEY) {
-        fail('กรุณากำหนด EMAIL, PASSWORD และ SUPABASE_ANON_KEY ก่อนรัน');
-    }
+  if (!EMAIL || !PASSWORD || !SUPABASE_ANON_KEY) {
+    fail('กรุณากำหนด EMAIL, PASSWORD และ SUPABASE_ANON_KEY ก่อนรัน');
+  }
 
-    // จำลอง Login ที่หน้าเว็บทำจริง: Supabase ก่อน แล้วจึงสร้าง session กับ Share-Ed
-    const supabaseLogin = http.post(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, JSON.stringify({ email: EMAIL, password: PASSWORD }), {
-        headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-        tags: { name: 'supabase_login' },
+  // Login ตามระบบจริงผ่าน Supabase แล้วนำ access token เดียวกันไปเรียก API หลังล็อกอิน
+  const supabaseLogin = http.post(
+    SUPABASE_URL + '/auth/v1/token?grant_type=password',
+    JSON.stringify({ email: EMAIL, password: PASSWORD }),
+    {
+      headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      tags: { endpoint: 'Login (Supabase)' },
+    },
+  );
+  const loginOk = check(supabaseLogin, {
+    'Login ผ่านและได้รับ access token': (r) => r.status === 200 && !!r.json('access_token'),
+  });
+
+  if (!loginOk) {
+    fail('Login ไม่สำเร็จ จึงหยุดก่อนเรียก API อื่น');
+  }
+
+  const accessToken = supabaseLogin.json('access_token');
+  const authParams = {
+    headers: {
+      Authorization: 'Bearer ' + accessToken,
+      apikey: SUPABASE_ANON_KEY,
+    },
+  };
+
+  // ตรวจว่า session ใช้เรียกข้อมูลผู้ใช้ปัจจุบันได้ โดยไม่แก้ไขข้อมูล
+  const me = http.get(API_BASE_URL + '/auth/me', {
+    ...authParams,
+    tags: { endpoint: 'ข้อมูลผู้ใช้ปัจจุบัน' },
+  });
+  check(me, { 'Session ผู้ใช้ตอบกลับ 200': (r) => r.status === 200 });
+
+  // อ่านรายการโพสต์และเปิดรายละเอียดโพสต์แรกเท่านั้น
+  const posts = http.get(API_BASE_URL + '/posts', {
+    ...authParams,
+    tags: { endpoint: 'รายการโพสต์' },
+  });
+  check(posts, { 'รายการโพสต์ตอบกลับ 200': (r) => r.status === 200 });
+
+  const post = (posts.json('data') || [])[0];
+  if (post?.id) {
+    const detail = http.get(API_BASE_URL + '/posts/' + post.id, {
+      ...authParams,
+      tags: { endpoint: 'รายละเอียดโพสต์' },
     });
-    check(supabaseLogin, { 'Supabase Login สำเร็จ': (r) => r.status === 200 && !!r.json('access_token') });
+    check(detail, { 'รายละเอียดโพสต์ตอบกลับ 200': (r) => r.status === 200 });
+  }
 
-    const backendLogin = http.post(`${API_BASE_URL}/auth/login`, JSON.stringify({ email: EMAIL, password: PASSWORD }), {
-        headers: { 'Content-Type': 'application/json' },
-        tags: { name: 'api_login' },
-    });
-    check(backendLogin, { 'Share-Ed Login สำเร็จ': (r) => r.status === 200 });
-
-    // นำ token ที่ backend คืนมาไปเรียกข้อมูลที่ต้อง Login โดยไม่เปลี่ยนข้อมูลใด ๆ
-    const token = backendLogin.json('token') || backendLogin.json('access_token') || backendLogin.json('data.token');
-    const authParams = { headers: token ? { Authorization: `Bearer ${token}` } : {} };
-    const me = http.get(`${API_BASE_URL}/auth/me`, { ...authParams, tags: { name: 'api_me' } });
-    check(me, { 'ข้อมูลผู้ใช้ปัจจุบันตอบกลับ 200': (r) => r.status === 200 });
-
-    const posts = http.get(`${API_BASE_URL}/posts`, { tags: { name: 'api_posts' } });
-    const post = (posts.json('data') || [])[0];
-    if (post) {
-        const detail = http.get(`${API_BASE_URL}/posts/${post.id}`, { ...authParams, tags: { name: 'api_post_detail' } });
-        check(detail, { 'รายละเอียดโพสต์หลัง Login ตอบกลับ 200': (r) => r.status === 200 });
-    }
-    sleep(1);
+  sleep(1);
 }
 
-// ให้ k6 แสดงสรุปภาษาไทยและบันทึกผลดิบหลังทดสอบเสร็จ
+// แสดงสรุปภาษาไทยและบันทึกผลดิบเป็น Artifact
 export function handleSummary(data) {
-    return thaiSummary(data);
+  return thaiSummary(data);
 }
