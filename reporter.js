@@ -4,16 +4,30 @@ function metric(data, name, key, fallback = 0) {
 }
 
 function percent(value) {
-    return `${(value * 100).toFixed(2)}%`;
+    return (value * 100).toFixed(2) + '%';
 }
 
 function milliseconds(value) {
-    return `${Number(value).toFixed(2)} ms`;
+    return Number(value).toFixed(2) + ' ms';
 }
 
 function thresholdStatus(data) {
     const all = Object.values(data.metrics).flatMap((item) => Object.values(item.thresholds || {}));
     return all.length === 0 || all.every((threshold) => threshold.ok);
+}
+
+function endpointReport(data) {
+    // ชื่อ metric เหล่านี้มาจาก diagnostic-test.js
+    const items = [
+        ['web_home_duration', 'หน้า Home'],
+        ['api_posts_duration', 'รายการโพสต์'],
+        ['api_categories_duration', 'หมวดหมู่'],
+        ['api_profile_duration', 'โปรไฟล์ผู้เขียน'],
+    ];
+
+    return items
+        .filter(([name]) => data.metrics[name])
+        .map(([name, label]) => '- ' + label + ': p95 ' + milliseconds(metric(data, name, 'p(95)')));
 }
 
 export function thaiSummary(data) {
@@ -30,16 +44,21 @@ export function thaiSummary(data) {
     const lines = [
         '',
         '========== รายงาน Load Test: Share-Ed ==========',
-        `สถานะรวม: ${passed ? 'ผ่าน ✅' : 'ควรตรวจสอบ ❌'}`,
-        `ผู้ใช้จำลองสูงสุด: ${vusMax} VUs`,
-        `จำนวน Request: ${requests} (${requestsPerSecond.toFixed(2)} req/s)`,
-        `Checks: ผ่าน ${passedChecks} | ไม่ผ่าน ${failedChecks}`,
-        `Request ล้มเหลว: ${percent(failedRate)}  (เกณฑ์: < 1%)`,
-        `API p95: ${milliseconds(p95)}  (เกณฑ์: < 1000 ms)`,
+        'สถานะรวม: ' + (passed ? 'ผ่าน ✅' : 'ควรตรวจสอบ ❌'),
+        'ผู้ใช้จำลองสูงสุด: ' + vusMax + ' VUs',
+        'จำนวน Request: ' + requests + ' (' + requestsPerSecond.toFixed(2) + ' req/s)',
+        'Checks: ผ่าน ' + passedChecks + ' | ไม่ผ่าน ' + failedChecks,
+        'Request ล้มเหลว: ' + percent(failedRate) + '  (เกณฑ์: < 1%)',
+        'API p95: ' + milliseconds(p95) + '  (เกณฑ์: < 1000 ms)',
     ];
 
     if (journeyP95 !== null) {
-        lines.push(`Journey p95: ${milliseconds(journeyP95)}  (เกณฑ์: < 5000 ms)`);
+        lines.push('Journey p95: ' + milliseconds(journeyP95) + '  (เกณฑ์: < 5000 ms)');
+    }
+
+    const endpoints = endpointReport(data);
+    if (endpoints.length > 0) {
+        lines.push('เวลาของแต่ละส่วน:', ...endpoints);
     }
 
     if (passed) {
@@ -47,14 +66,14 @@ export function thaiSummary(data) {
     } else if (failedRate >= 0.01) {
         lines.push('สรุป: Error เกินเกณฑ์ ให้ดู endpoint ที่ error ในรายงาน k6 ก่อนเพิ่มจำนวน VUs');
     } else if (p95 >= 1000) {
-        lines.push('สรุป: API ช้าเกินเกณฑ์ ให้ดูค่า p95 ของแต่ละ endpoint และ log ของ backend/database');
+        lines.push('สรุป: API ช้าเกินเกณฑ์ ให้ดูเวลาของแต่ละส่วน และ log ของ backend/database');
     } else {
         lines.push('สรุป: มี check หรือ threshold ไม่ผ่าน ให้ตรวจบรรทัดที่มีเครื่องหมาย ✗ ในผล k6');
     }
     lines.push('==================================================', '');
 
     return {
-        stdout: `${lines.join('\n')}\n`,
+        stdout: lines.join('\n') + '\n',
         // เก็บข้อมูลดิบอัตโนมัติ เพื่อนำมาเปรียบเทียบก่อนและหลังปรับระบบ
         'results/latest-summary.json': JSON.stringify(data, null, 2),
     };
