@@ -8,7 +8,7 @@ on:
       - '**.js'
       - '.github/workflows/load-test.yml'
 
-  # ใช้ปุ่ม Run workflow เพื่อเลือกทดสอบ 20, 50 หรือ 100 VUs ด้วยตนเอง
+  # ใช้ปุ่ม Run workflow เพื่อเลือกชุดทดสอบด้วยตนเอง
   workflow_dispatch:
     inputs:
       test_profile:
@@ -16,7 +16,7 @@ on:
         required: true
         default: smoke
         type: choice
-        options: [smoke, load20, capacity]
+        options: [smoke, diagnostic, load20, capacity]
       max_vus:
         description: 'ใช้เมื่อเลือก capacity: 20, 50 หรือ 100'
         required: true
@@ -53,6 +53,9 @@ jobs:
             smoke)
               docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run smoke-test.js
               ;;
+            diagnostic)
+              docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run diagnostic-test.js
+              ;;
             load20)
               docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run load-test.js
               ;;
@@ -73,8 +76,7 @@ jobs:
 
       - name: ส่งรายงานเข้า Discord
         if: ${{ always() && env.DISCORD_WEBHOOK_URL != '' }}
-        run: |
-          curl --fail --request POST "$DISCORD_WEBHOOK_URL"             --header 'Content-Type: application/json'             --data @results/discord-payload.json
+        run: curl --fail --request POST "$DISCORD_WEBHOOK_URL" --header 'Content-Type: application/json' --data @results/discord-payload.json
 
       - name: เก็บผลทดสอบเป็นไฟล์ดาวน์โหลด
         if: always()
