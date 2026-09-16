@@ -76,7 +76,8 @@ jobs:
 
       - name: ส่งรายงานเข้า Discord
         if: ${{ always() && env.DISCORD_WEBHOOK_URL != '' }}
-        run: curl --fail --request POST "$DISCORD_WEBHOOK_URL" --header 'Content-Type: application/json' --data @results/discord-payload.json
+        run: |
+          curl --fail --request POST "$DISCORD_WEBHOOK_URL" --header 'Content-Type: application/json' --data @results/discord-payload.json
 
       - name: เก็บผลทดสอบเป็นไฟล์ดาวน์โหลด
         if: always()
