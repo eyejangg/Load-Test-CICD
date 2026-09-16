@@ -51,13 +51,13 @@ jobs:
         run: |
           case "$TEST_PROFILE" in
             smoke)
-              docker run --rm -v "$PWD:/work" -w /work grafana/k6:1.7.1 run smoke-test.js
+              docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run smoke-test.js
               ;;
             load20)
-              docker run --rm -v "$PWD:/work" -w /work grafana/k6:1.7.1 run load-test.js
+              docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run load-test.js
               ;;
             capacity)
-              docker run --rm -v "$PWD:/work" -w /work grafana/k6:1.7.1 run -e MAX_VUS="$MAX_VUS" capacity-test.js
+              docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:1.7.1 run -e MAX_VUS="$MAX_VUS" capacity-test.js
               ;;
             *)
               echo "ไม่รู้จักชุดทดสอบ: $TEST_PROFILE"
@@ -74,9 +74,7 @@ jobs:
       - name: ส่งรายงานเข้า Discord
         if: ${{ always() && env.DISCORD_WEBHOOK_URL != '' }}
         run: |
-          curl --fail --request POST "$DISCORD_WEBHOOK_URL" \
-            --header 'Content-Type: application/json' \
-            --data @results/discord-payload.json
+          curl --fail --request POST "$DISCORD_WEBHOOK_URL"             --header 'Content-Type: application/json'             --data @results/discord-payload.json
 
       - name: เก็บผลทดสอบเป็นไฟล์ดาวน์โหลด
         if: always()
